@@ -24,3 +24,5 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gotest.tools/v3 v3.0.3 // indirect
 )
+
+replace github.com/containers/ocicrypt => /home/stefanb/go/src/github.com/containers/ocicrypt

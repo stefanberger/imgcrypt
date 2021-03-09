@@ -22,11 +22,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"math/rand"
 
 	"github.com/containerd/containerd/images"
 	"github.com/containers/ocicrypt"
 	encconfig "github.com/containers/ocicrypt/config"
+	"github.com/containers/ocicrypt/utils"
 
 	"github.com/containerd/containerd/content"
 	"github.com/containerd/containerd/errdefs"
@@ -72,16 +74,18 @@ func HasEncryptedLayer(ctx context.Context, layerInfos []ocispec.Descriptor) boo
 // encryptLayer encrypts the layer using the CryptoConfig and creates a new OCI Descriptor.
 // A call to this function may also only manipulate the wrapped keys list.
 // The caller is expected to store the returned encrypted data and OCI Descriptor
-func encryptLayer(cc *encconfig.CryptoConfig, dataReader content.ReaderAt, desc ocispec.Descriptor) (ocispec.Descriptor, io.Reader, ocicrypt.EncryptLayerFinalizer, error) {
+func encryptLayer(cc *encconfig.CryptoConfig, dataReader content.ReaderAt, desc ocispec.Descriptor, previousLayersDigest []byte) (ocispec.Descriptor, io.Reader, ocicrypt.EncryptLayerFinalizer, []byte, error) {
 	var (
 		size int64
 		d    digest.Digest
 		err  error
 	)
 
-	encLayerReader, encLayerFinalizer, err := ocicrypt.EncryptLayer(cc.EncryptConfig, ocicrypt.ReaderFromReaderAt(dataReader), desc)
+	fmt.Fprintf(os.Stderr, "encryptLayer: IN: %x\n", previousLayersDigest)
+	encLayerReader, encLayerFinalizer, previousLayersDigest, err := ocicrypt.EncryptLayer(cc.EncryptConfig, ocicrypt.ReaderFromReaderAt(dataReader), desc, previousLayersDigest)
+	fmt.Fprintf(os.Stderr, "encryptLayer OUT: %x\n", previousLayersDigest)
 	if err != nil {
-		return ocispec.Descriptor{}, nil, nil, err
+		return ocispec.Descriptor{}, nil, nil, nil, err
 	}
 
 	// were data touched ?
@@ -116,18 +120,20 @@ func encryptLayer(cc *encconfig.CryptoConfig, dataReader content.ReaderAt, desc 
 		newDesc.MediaType = encocispec.MediaTypeLayerEnc
 
 	default:
-		return ocispec.Descriptor{}, nil, nil, errors.Errorf("Encryption: unsupporter layer MediaType: %s\n", desc.MediaType)
+		return ocispec.Descriptor{}, nil, nil, nil, errors.Errorf("Encryption: unsupporter layer MediaType: %s\n", desc.MediaType)
 	}
 
-	return newDesc, encLayerReader, encLayerFinalizer, nil
+	return newDesc, encLayerReader, encLayerFinalizer, previousLayersDigest, nil
 }
 
 // DecryptLayer decrypts the layer using the DecryptConfig and creates a new OCI Descriptor.
 // The caller is expected to store the returned plain data and OCI Descriptor
-func DecryptLayer(dc *encconfig.DecryptConfig, dataReader io.Reader, desc ocispec.Descriptor, unwrapOnly bool) (ocispec.Descriptor, io.Reader, digest.Digest, error) {
-	resultReader, layerDigest, err := ocicrypt.DecryptLayer(dc, dataReader, desc, unwrapOnly)
+func DecryptLayer(dc *encconfig.DecryptConfig, dataReader io.Reader, desc ocispec.Descriptor, unwrapOnly bool, previousLayersDigest []byte) (ocispec.Descriptor, io.Reader, digest.Digest, []byte, error) {
+	fmt.Fprintf(os.Stderr, "decryptLayer: IN: %x\n", previousLayersDigest)
+	resultReader, layerDigest, previousLayersDigest, err := ocicrypt.DecryptLayer(dc, dataReader, desc, unwrapOnly, previousLayersDigest)
+	fmt.Fprintf(os.Stderr, "decryptLayer OUT: %x\n", previousLayersDigest)
 	if err != nil || unwrapOnly {
-		return ocispec.Descriptor{}, nil, "", err
+		return ocispec.Descriptor{}, nil, "", nil, err
 	}
 
 	newDesc := ocispec.Descriptor{
@@ -141,17 +147,19 @@ func DecryptLayer(dc *encconfig.DecryptConfig, dataReader io.Reader, desc ocispe
 	case encocispec.MediaTypeLayerEnc:
 		newDesc.MediaType = images.MediaTypeDockerSchema2Layer
 	default:
-		return ocispec.Descriptor{}, nil, "", errors.Errorf("Decryption: unsupporter layer MediaType: %s\n", desc.MediaType)
+		return ocispec.Descriptor{}, nil, "", nil, errors.Errorf("Decryption: unsupporter layer MediaType: %s\n", desc.MediaType)
 	}
-	return newDesc, resultReader, layerDigest, nil
+	return newDesc, resultReader, layerDigest, previousLayersDigest, nil
 }
 
 // decryptLayer decrypts the layer using the CryptoConfig and creates a new OCI Descriptor.
 // The caller is expected to store the returned plain data and OCI Descriptor
-func decryptLayer(cc *encconfig.CryptoConfig, dataReader content.ReaderAt, desc ocispec.Descriptor, unwrapOnly bool) (ocispec.Descriptor, io.Reader, error) {
-	resultReader, d, err := ocicrypt.DecryptLayer(cc.DecryptConfig, ocicrypt.ReaderFromReaderAt(dataReader), desc, unwrapOnly)
+func decryptLayer(cc *encconfig.CryptoConfig, dataReader content.ReaderAt, desc ocispec.Descriptor, unwrapOnly bool, previousLayersDigest []byte) (ocispec.Descriptor, io.Reader, []byte, error) {
+	fmt.Fprintf(os.Stderr, "decryptLayer: IN: %x\n", previousLayersDigest)
+	resultReader, d, previousLayersDigest, err := ocicrypt.DecryptLayer(cc.DecryptConfig, ocicrypt.ReaderFromReaderAt(dataReader), desc, unwrapOnly, previousLayersDigest)
+	fmt.Fprintf(os.Stderr, "decryptLayer OUT: %x\n", previousLayersDigest)
 	if err != nil || unwrapOnly {
-		return ocispec.Descriptor{}, nil, err
+		return ocispec.Descriptor{}, nil, nil, err
 	}
 
 	newDesc := ocispec.Descriptor{
@@ -166,13 +174,13 @@ func decryptLayer(cc *encconfig.CryptoConfig, dataReader content.ReaderAt, desc 
 	case encocispec.MediaTypeLayerEnc:
 		newDesc.MediaType = images.MediaTypeDockerSchema2Layer
 	default:
-		return ocispec.Descriptor{}, nil, errors.Errorf("Decryption: unsupporter layer MediaType: %s\n", desc.MediaType)
+		return ocispec.Descriptor{}, nil, nil, errors.Errorf("Decryption: unsupporter layer MediaType: %s\n", desc.MediaType)
 	}
-	return newDesc, resultReader, nil
+	return newDesc, resultReader, previousLayersDigest, nil
 }
 
 // cryptLayer handles the changes due to encryption or decryption of a layer
-func cryptLayer(ctx context.Context, cs content.Store, desc ocispec.Descriptor, cc *encconfig.CryptoConfig, cryptoOp cryptoOp) (ocispec.Descriptor, error) {
+func cryptLayer(ctx context.Context, cs content.Store, desc ocispec.Descriptor, cc *encconfig.CryptoConfig, cryptoOp cryptoOp, previousLayersDigest []byte) (ocispec.Descriptor, []byte, error) {
 	var (
 		resultReader      io.Reader
 		newDesc           ocispec.Descriptor
@@ -181,17 +189,17 @@ func cryptLayer(ctx context.Context, cs content.Store, desc ocispec.Descriptor, 
 
 	dataReader, err := cs.ReaderAt(ctx, desc)
 	if err != nil {
-		return ocispec.Descriptor{}, err
+		return ocispec.Descriptor{}, nil, err
 	}
 	defer dataReader.Close()
 
 	if cryptoOp == cryptoOpEncrypt {
-		newDesc, resultReader, encLayerFinalizer, err = encryptLayer(cc, dataReader, desc)
+		newDesc, resultReader, encLayerFinalizer, previousLayersDigest, err = encryptLayer(cc, dataReader, desc, previousLayersDigest)
 	} else {
-		newDesc, resultReader, err = decryptLayer(cc, dataReader, desc, cryptoOp == cryptoOpUnwrapOnly)
+		newDesc, resultReader, previousLayersDigest, err = decryptLayer(cc, dataReader, desc, cryptoOp == cryptoOpUnwrapOnly, previousLayersDigest)
 	}
 	if err != nil || cryptoOp == cryptoOpUnwrapOnly {
-		return ocispec.Descriptor{}, err
+		return ocispec.Descriptor{}, nil, err
 	}
 
 	newDesc.Annotations = ocicrypt.FilterOutAnnotations(desc.Annotations)
@@ -209,12 +217,12 @@ func cryptLayer(ctx context.Context, cs content.Store, desc ocispec.Descriptor, 
 
 		if haveDigest {
 			if err := content.WriteBlob(ctx, cs, ref, resultReader, newDesc); err != nil {
-				return ocispec.Descriptor{}, errors.Wrap(err, "failed to write config")
+				return ocispec.Descriptor{}, nil, errors.Wrap(err, "failed to write config")
 			}
 		} else {
 			newDesc.Digest, newDesc.Size, err = ingestReader(ctx, cs, ref, resultReader)
 			if err != nil {
-				return ocispec.Descriptor{}, err
+				return ocispec.Descriptor{}, nil, err
 			}
 		}
 	}
@@ -223,13 +231,13 @@ func cryptLayer(ctx context.Context, cs content.Store, desc ocispec.Descriptor, 
 	if encLayerFinalizer != nil {
 		annotations, err := encLayerFinalizer()
 		if err != nil {
-			return ocispec.Descriptor{}, errors.Wrap(err, "Error getting annotations from encLayer finalizer")
+			return ocispec.Descriptor{}, nil, errors.Wrap(err, "Error getting annotations from encLayer finalizer")
 		}
 		for k, v := range annotations {
 			newDesc.Annotations[k] = v
 		}
 	}
-	return newDesc, err
+	return newDesc, previousLayersDigest, err
 }
 
 func ingestReader(ctx context.Context, cs content.Ingester, ref string, r io.Reader) (digest.Digest, int64, error) {
@@ -269,7 +277,14 @@ func cryptChildren(ctx context.Context, cs content.Store, desc ocispec.Descripto
 
 	var newLayers []ocispec.Descriptor
 	var config ocispec.Descriptor
+	var nl ocispec.Descriptor
 	modified := false
+	if (cryptoOp == cryptoOpEncrypt) {
+		fmt.Fprintf(os.Stderr, "encryption: Getting initial PreviousLayersDigest\n");
+	} else {
+		fmt.Fprintf(os.Stderr, "decryption: Getting initial PreviousLayersDigest\n");
+	}
+	previousLayersDigest := utils.GetInitialPreviousLayersDigest()
 
 	for _, child := range children {
 		// we only encrypt child layers and have to update their parents if encryption happened
@@ -279,7 +294,7 @@ func cryptChildren(ctx context.Context, cs content.Store, desc ocispec.Descripto
 		case images.MediaTypeDockerSchema2LayerGzip, images.MediaTypeDockerSchema2Layer,
 			ocispec.MediaTypeImageLayerGzip, ocispec.MediaTypeImageLayer:
 			if cryptoOp == cryptoOpEncrypt && lf(child) {
-				nl, err := cryptLayer(ctx, cs, child, cc, cryptoOp)
+				nl, previousLayersDigest, err = cryptLayer(ctx, cs, child, cc, cryptoOp, previousLayersDigest)
 				if err != nil {
 					return ocispec.Descriptor{}, false, err
 				}
@@ -291,7 +306,7 @@ func cryptChildren(ctx context.Context, cs content.Store, desc ocispec.Descripto
 		case encocispec.MediaTypeLayerGzipEnc, encocispec.MediaTypeLayerEnc:
 			// this one can be decrypted but also its recipients list changed
 			if lf(child) {
-				nl, err := cryptLayer(ctx, cs, child, cc, cryptoOp)
+				nl, previousLayersDigest, err = cryptLayer(ctx, cs, child, cc, cryptoOp, previousLayersDigest)
 				if err != nil || cryptoOp == cryptoOpUnwrapOnly {
 					return ocispec.Descriptor{}, false, err
 				}

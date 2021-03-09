@@ -26,6 +26,7 @@ import (
 	"github.com/containerd/imgcrypt"
 	"github.com/containerd/typeurl"
 	encconfig "github.com/containers/ocicrypt/config"
+	"github.com/containers/ocicrypt/utils"
 	"github.com/gogo/protobuf/types"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
@@ -38,6 +39,8 @@ func WithDecryptedUnpack(data *imgcrypt.Payload) diff.ApplyOpt {
 			c.ProcessorPayloads = make(map[string]*types.Any)
 		}
 		data.Descriptor = desc
+		// FIXME: This can only be done like this for the very first layer!
+		data.PreviousLayersDigest = utils.GetInitialPreviousLayersDigest()
 		any, err := typeurl.MarshalAny(data)
 		if err != nil {
 			return errors.Wrapf(err, "failed to marshal payload")

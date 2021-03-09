@@ -38,6 +38,7 @@ func init() {
 // Payload holds data that the external layer decryption tool
 // needs for decrypting a layer
 type Payload struct {
-	DecryptConfig encconfig.DecryptConfig
-	Descriptor    ocispec.Descriptor
+	DecryptConfig        encconfig.DecryptConfig
+	Descriptor           ocispec.Descriptor
+	PreviousLayersDigest []byte
 }

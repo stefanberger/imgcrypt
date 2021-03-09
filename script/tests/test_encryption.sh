@@ -195,6 +195,8 @@ testPGP() {
 	setupPGP
 	echo "Testing PGP type of encryption on ${NGINX}"
 
+	$CTR images layerinfo ${NGINX}
+
 	# nginx has large layers that are worth testing
 	$CTR images encrypt \
 		--gpg-homedir ${GPGHOMEDIR} \
@@ -233,6 +235,8 @@ testPGP() {
 	echo "PASS: PGP Type of encryption on ${NGINX}"
 	echo
 	echo "Testing PGP Type of encryption on ${ALPINE}"
+
+	$CTR images layerinfo ${ALPINE}
 
 	$CTR images encrypt \
 		--gpg-homedir ${GPGHOMEDIR} \

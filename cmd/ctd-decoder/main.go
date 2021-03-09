@@ -77,7 +77,8 @@ func decrypt(ctx *cli.Context) error {
 		decCc = combineDecryptionConfigs(keyPathCc.DecryptConfig, &payload.DecryptConfig)
 	}
 
-	_, r, _, err := encryption.DecryptLayer(decCc, os.Stdin, payload.Descriptor, false)
+	previousLayersDigest := payload.PreviousLayersDigest
+	_, r, _, _, err := encryption.DecryptLayer(decCc, os.Stdin, payload.Descriptor, false, previousLayersDigest)
 	if err != nil {
 		return errors.Wrapf(err, "call to DecryptLayer failed")
 	}
