@@ -1,0 +1,49 @@
+dist: bionic
+language: go
+
+go:
+  - "1.17.x"
+
+addons:
+  apt:
+    packages:
+      - libseccomp-dev
+      - gnutls-bin
+      - softhsm2
+
+before_install:
+  - uname -r
+  - uname -p
+  - |
+    pushd ..
+     git clone https://github.com/containerd/containerd.git
+     pushd containerd
+      RUNC_COMMIT=$(grep opencontainers/runc go.mod | awk '{print $2}')
+      make -j$(nproc)
+      sudo make install
+      sudo rm -f $(type -P ctr)
+     popd
+     git clone https://github.com/opencontainers/runc.git
+     pushd runc
+      git checkout "${RUNC_COMMIT}"
+      make BUILDTAGS='apparmor seccomp selinux' runc
+      sudo make install
+     popd
+     git clone https://github.com/lumjjb/simple-ocicrypt-keyprovider
+     pushd simple-ocicrypt-keyprovider
+      make
+      sudo cp simple_crypt /usr/local/bin
+     popd
+    popd
+
+script:
+  - make
+  - CONTAINERD=$(type -P containerd) KEYPROVIDER=/usr/local/bin/simple_crypt ./script/tests/test_encryption.sh
+
+matrix:
+  include:
+    - dist: bionic
+    - dist: bionic
+      arch: ppc64le
+    - dist: bionic
+      arch: arm64

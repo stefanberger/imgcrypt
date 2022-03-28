@@ -161,6 +161,20 @@ failExit() {
 	fi
 }
 
+get_image_arch()
+{
+	local a
+
+	case $(uname -p) in
+	x86_64) a="amd64";;
+	ppc64le) a="ppc64le";;
+	aarch64) a="arm64";;
+	s390x) a="s390x";;
+	*) a="unknown";;
+	esac
+	echo -n "${a}"
+}
+
 pullImages() {
 	if [ -z "$IMAGE_PULL_CREDS" ]; then
 		echo "Note: Image pull credentials can be passed with env. variable IMAGE_PULL_CREDS=<username>:<password>"
@@ -169,7 +183,7 @@ pullImages() {
 	$CTR images pull ${IMAGE_PULL_CREDS:+--user ${IMAGE_PULL_CREDS}} --all-platforms ${ALPINE} &>/dev/null
 	failExit $? "Image pull failed on ${ALPINE}"
 
-	$CTR images pull ${IMAGE_PULL_CREDS:+--user ${IMAGE_PULL_CREDS}} --platform linux/amd64 ${NGINX} &>/dev/null
+	$CTR images pull ${IMAGE_PULL_CREDS:+--user ${IMAGE_PULL_CREDS}} --platform linux/$(get_image_arch) ${NGINX} &>/dev/null
 	failExit $? "Image pull failed on ${NGINX}"
 
 	# pull bash only for local platform
